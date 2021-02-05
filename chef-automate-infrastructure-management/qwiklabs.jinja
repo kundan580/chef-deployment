@@ -1,0 +1,112 @@
+imports:
+- path: frontend_service_template.py
+- path: server_template.py
+- path: workstation_template.py
+- path: firewall.py
+- path: frontend_forwarding.py
+- path: software_status.py
+
+{# Environment provided properties #}
+{% set project = env["project"] %}
+{% set deployment = env["deployment"] %}
+{% set password = properties["userPassword"] %}
+{% set username = properties["userName"] %}
+{% set zone = properties["zone"] %}
+{% set sshpubkey = properties["sshPubKey"] %}
+{% set keyFile = properties["keyFile"] %}
+
+{# Network variables #}
+{% set firewallname = "custom-network-firewall" %}
+
+{# Frontend variables #}
+{% set FRONTEND = env["deployment"] + "-frontend" %}
+{% set port = 80 %}
+{% set service = "http" %}
+{% set forwarding = "frontend-forwading-rules" %}
+
+{# Machine variables #}
+{% set serverName = "chef-server" %}
+{% set workstationName = "chef-workstation" %}
+
+{# Runtime config and software status waiter #}
+{% set RTCEndpoint = "https://runtimeconfig.googleapis.com/v1beta1" %}
+{% set statusDeadline = 600 %}
+{% set statusVariablePath = "status" %}
+
+{% set configName = deployment + "-config" %}
+{% macro configUrl() -%}
+{{ "%s/projects/%s/configs/%s"|format(RTCEndpoint, project, configName) }}
+{%- endmacro %}
+
+
+outputs:
+  - name: chef-workstation external IP address
+    value: $(ref.{{ workstationName }}.externalIp)
+  - name: Load balancer's external IP address
+    value: $(ref.{{ deployment }}-forwarding.IPAddress)
+  - name: username
+    value: {{ username }}
+
+resources:
+
+- name: {{ serverName }}
+  type: server_template.py
+  properties:
+    deployment: {{ deployment }}
+    zone: {{ zone }}
+    userName: {{ username }}
+    userPassword: {{ password }}
+    networkIP: "10.0.0.10"
+    sshpubkey: {{ sshpubkey }}
+    statusConfigUrl: {{ configUrl() }}
+    statusVariablePath: {{ statusVariablePath }}
+    statusUptimeDeadline: {{ statusDeadline }}
+
+- name: {{ workstationName }}
+  type: workstation_template.py
+  properties:
+    deployment: {{ deployment }}
+    zone: {{ zone }}
+    userName: {{ username }}
+    userPassword: {{ password }}
+    serverName: {{ serverName }}
+    networkIP: "10.0.0.100"
+    sshpubkey: {{ sshpubkey }}
+    keyFile: {{ keyFile }}
+    statusConfigUrl: {{ configUrl() }}
+    statusVariablePath: {{ statusVariablePath }}
+    statusUptimeDeadline: {{ statusDeadline }}
+ 
+- name: {{ firewallname }}
+  type: firewall.py
+  
+- name: {{ FRONTEND }}
+  type: frontend_service_template.py
+  properties:
+    zone: {{ zone }}
+    port: {{ port }}
+    service: {{ service }}
+    userName: {{ username }}
+    userPassword: {{ password }}
+    sshPubKey: {{ sshpubkey }}
+    statusConfigUrl: {{ configUrl() }}
+    statusVariablePath: {{ statusVariablePath }}
+    statusUptimeDeadline: {{ statusDeadline }}
+  
+- name: {{ forwarding }}
+  type: frontend_forwarding.py
+  properties:
+    frontend: {{ FRONTEND }}
+    port: {{ port }}
+
+- name: {{ configName }}
+  type: software_status.py
+  properties:
+    project: {{ project }}
+    deployment: {{ deployment }}
+    timeout: {{ statusDeadline }}
+    statusPath: {{ statusVariablePath }}
+    waiterDependsOn:
+      - {{ serverName }}
+      - {{ workstationName }}
+      - {{ FRONTEND }}-it
